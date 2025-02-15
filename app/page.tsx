@@ -1,101 +1,236 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useRef } from "react";
+import WalletConnect, { CHAIN_ID } from "@/components/WalletConnect";
+import { prepareBlob } from "@/utils/prepareBlob";
+import { fetchEstimatedGas } from "@/utils/fetchEstimatedGas";
+import { sendPayForBlob } from "..";
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const [namespace, setNamespace] = useState("");
+  const [namespaceError, setNamespaceError] = useState("");
+  const [blob, setBlob] = useState<Uint8Array | null>(null);
+  const [fileType, setFileType] = useState<string>("");
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+
+  const handleNamespaceChange = (value: string) => {
+    setNamespace(value);
+
+    if (
+      (!/^[0-9a-fA-F]+$/g.test(value) && value.length >= 4) ||
+      value.length > 58
+    ) {
+      setNamespaceError("Validation error");
+      return;
+    }
+
+    if (value.length) {
+      const numValue = BigInt("0x" + value);
+      const maxValue = BigInt(
+        "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00"
+      );
+
+      if (numValue > 0xff && numValue < maxValue) {
+        setNamespaceError("");
+      } else {
+        setNamespaceError("Validation error");
+      }
+    } else {
+      setNamespaceError("");
+    }
+  };
+
+  const handleUpload = (e: any, target: "drop" | "select") => {
+    const file =
+      target === "drop" ? e.dataTransfer.files[0] : e.target.files[0];
+
+    if (file.size > 80_000) {
+      alert("Max file size is 25kb");
+      return;
+    }
+
+    if (!["text/plain", "image/png", "image/jpeg"].includes(file.type)) {
+      alert("Only text or image files are allowed");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = function (e) {
+      if (e.target) {
+        const bytes = new Uint8Array(e.target.result as ArrayBuffer);
+        setBlob(bytes);
+        setFileType(file.type);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleSubmit = async () => {
+    if (!window.keplr) {
+      alert("Keplr is not installed");
+      return;
+    }
+
+    const offlineSigner = window.keplr.getOfflineSigner(CHAIN_ID);
+    const accounts = await offlineSigner.getAccounts();
+    const address = accounts[0].address;
+
+    if (!blob) {
+      alert("Blob is not available");
+      return;
+    }
+
+    const hexString = [...blob]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const [data, decodableBlob, length] = prepareBlob(
+      address,
+      namespace,
+      hexString
+    );
+
+    console.log(data, decodableBlob, length);
+
+    if (typeof length !== "number") {
+      alert("Invalid length value");
+      return;
+    }
+
+    let estimatedGas = await fetchEstimatedGas(length);
+    console.log("estimatedGas", estimatedGas);
+
+    let gasPrice = 0;
+
+    let fee =
+      gasPrice * estimatedGas > 1
+        ? Math.trunc(gasPrice * estimatedGas).toString()
+        : "10000";
+
+    const proto = [
+      {
+        typeUrl: "/celestia.blob.v1.MsgPayForBlobs",
+        value: data,
+      },
+    ];
+    const stdFee = {
+      amount: [
+        {
+          denom: "utia",
+          amount: fee,
+        },
+      ],
+      gas: estimatedGas,
+    };
+
+    const txHash = await sendPayForBlob(
+      CHAIN_ID,
+      address,
+      proto,
+      stdFee,
+      decodableBlob instanceof Uint8Array ? decodableBlob : new Uint8Array()
+    );
+  };
+
+  return (
+    <div className="min-h-screen p-8">
+      <div className="max-w-2xl mx-auto flex flex-col gap-8">
+        <WalletConnect />
+
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-6">
+          <div className="flex flex-col gap-6">
+            <h2 className="text-lg font-semibold">Submit data blob</h2>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-semibold text-gray-600 dark:text-gray-300">
+                  Namespace
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                    0x
+                  </span>
+                  <input
+                    type="text"
+                    value={namespace}
+                    onChange={(e) => handleNamespaceChange(e.target.value)}
+                    className="w-full px-8 py-2 rounded-lg border bg-transparent"
+                    placeholder="Enter namespace"
+                  />
+                  {namespaceError && (
+                    <span className="text-yellow-500 text-xs mt-1 flex items-center gap-1">
+                      ⚠️ {namespaceError}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-semibold text-gray-600 dark:text-gray-300">
+                  File
+                </label>
+                {!blob ? (
+                  <label
+                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center cursor-pointer"
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleUpload(e, "drop");
+                    }}
+                    onDragOver={(e) => e.preventDefault()}
+                  >
+                    <input
+                      ref={uploadInputRef}
+                      type="file"
+                      onChange={(e) => handleUpload(e, "select")}
+                      accept="image/png,image/jpeg,text/plain"
+                      className="hidden"
+                    />
+                    <div className="flex flex-col items-center gap-4">
+                      <span className="text-gray-500">📤</span>
+                      <div className="flex flex-col gap-2">
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          Drag and drop the file you want to submit
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          PNG, JPEG or TXT, max size 25kb
+                        </p>
+                      </div>
+                    </div>
+                  </label>
+                ) : (
+                  <div className="flex items-center justify-between p-3 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <span>📄</span>
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold">
+                          File to submit
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {fileType}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setBlob(null)}
+                      className="px-3 py-1 text-sm rounded-full border hover:bg-gray-200 dark:hover:bg-gray-600"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleSubmit}
+                disabled={Boolean(!blob || !namespace || namespaceError)}
+                className="mt-4 w-full py-2 px-4 bg-blue-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors"
+              >
+                Submit Blob
+              </button>
+            </div>
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </div>
     </div>
   );
 }
