@@ -80,6 +80,7 @@ class BlobTx {
   }
 
   serializeBinary(): Uint8Array {
+    console.log("serializeBinary", this);
     // Calculate total size
     const txLength = this.tx.length;
     let totalSize = 0;
@@ -89,17 +90,25 @@ class BlobTx {
       totalSize += 1 + this.varintSize(txLength) + txLength;
     }
 
+    console.log("totalSize:", totalSize);
+
     // blobs field (field number 2)
     for (const blob of this.blobs) {
       const blobBytes = blob.serializeBinary();
       totalSize += 1 + this.varintSize(blobBytes.length) + blobBytes.length;
     }
 
+    console.log("blobBytesLength:", this.blobs[0].serializeBinary());
+
+    console.log("totalSize2:", totalSize);
+
     // typeId field (field number 3)
     if (this.typeId.length > 0) {
       const typeIdBytes = new TextEncoder().encode(this.typeId);
       totalSize += 1 + this.varintSize(typeIdBytes.length) + typeIdBytes.length;
     }
+
+    console.log("totalSize3:", totalSize);
 
     const buffer = new Uint8Array(totalSize);
     let offset = 0;
@@ -112,6 +121,8 @@ class BlobTx {
       offset += txLength;
     }
 
+    console.log("buffer1:", buffer);
+
     // Write blobs field
     for (const blob of this.blobs) {
       const blobBytes = blob.serializeBinary();
@@ -121,6 +132,8 @@ class BlobTx {
       offset += blobBytes.length;
     }
 
+    console.log("buffer2:", buffer);
+
     // Write typeId field
     if (this.typeId.length > 0) {
       const typeIdBytes = new TextEncoder().encode(this.typeId);
@@ -129,6 +142,9 @@ class BlobTx {
       buffer.set(typeIdBytes, offset);
     }
 
+    console.log("buffer3:", buffer);
+
+    console.log("buffer:", buffer);
     return buffer;
   }
 
@@ -156,6 +172,7 @@ class BlobTx {
 }
 
 const buildPayForBlob = (tx: Uint8Array, blob: Blob) => {
+  console.log("buildPayForBlob", tx, blob, typeof tx, typeof blob);
   const blobTx = new BlobTx();
   blobTx.setTx(tx);
   blobTx.setTypeId("BLOB");
@@ -181,6 +198,7 @@ export const broadcastTxSync = async (
   tx: Uint8Array
 ): Promise<Uint8Array> => {
   const mode = BroadcastMode?.Sync || "sync";
+  console.log(tx);
   return window.keplr!.sendTx(chainId, tx, mode);
 };
 
@@ -199,7 +217,8 @@ export const sendPayForBlob = async (
   sender: string,
   proto: any,
   fee: TransactionFee,
-  blob: Uint8Array
+  blob: any,
+  namespace: string
 ) => {
   const account = await fetchAccountInfo(sender);
 
@@ -264,12 +283,34 @@ export const sendPayForBlob = async (
         authInfoBytes: signed.signed.authInfoBytes,
         signatures: [decodeSignature(signed.signature.signature)],
       }).finish(),
-      new Blob({ data: blob })
+      blob
     );
 
-    console.log("blobTx:", blobTx);
+    const x = Fee.fromPartial({
+      amount: fee.amount.map((coin) => ({
+        denom: coin.denom,
+        amount: coin.amount.toString(),
+      })),
+    });
+    console.log("x", x);
 
-    const txHash = await broadcastTxSync(CHAIN_ID, blobTx);
+    // const protoBufTx = TxRaw.encode({
+    //   bodyBytes: signed.signed.bodyBytes,
+    //   authInfoBytes: signed.signed.authInfoBytes,
+    //   signatures: [Buffer.from(signed.signature.signature, "base64")],
+    // }).finish();
+
+    // console.log("protoBufTx:", protoBufTx);
+
+    // const mode = BroadcastMode?.Sync || "sync";
+    // const txResponse = await window.keplr!.sendTx(CHAIN_ID, protoBufTx, mode);
+    // const txHash = Buffer.from(txResponse).toString("hex");
+
+    // return txHash;
+
+    const txReponse = await broadcastTxSync(CHAIN_ID, blobTx);
+    const txHash = Buffer.from(txReponse).toString("hex");
+
     return Buffer.from(txHash).toString("hex");
   }
 };

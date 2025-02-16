@@ -90,7 +90,7 @@ export default function Home() {
       hexString
     );
 
-    console.log(data, decodableBlob, length);
+    console.log("handleContinue", data, decodableBlob, length);
 
     if (typeof length !== "number") {
       alert("Invalid length value");
@@ -117,7 +117,7 @@ export default function Home() {
       amount: [
         {
           denom: "utia",
-          amount: fee,
+          amount: "80000",
         },
       ],
       gas: estimatedGas,
@@ -128,7 +128,8 @@ export default function Home() {
       address,
       proto,
       stdFee,
-      decodableBlob instanceof Uint8Array ? decodableBlob : new Uint8Array()
+      decodableBlob,
+      namespace
     );
   };
 
